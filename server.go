@@ -6,7 +6,9 @@
 package rpc
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"reflect"
 	"strings"
@@ -37,6 +39,12 @@ type CodecRequest interface {
 // Server
 // ----------------------------------------------------------------------------
 
+var (
+	ErrEmptyBindLocal    = errors.New("rpc: local address list is empty")
+	ErrMalformedRemoteIp = errors.New("rpc: remote client rejected, cannot read its IP")
+	ErrRemoteNotAllowed  = errors.New("rpc: remote client rejected, not allowed by the server")
+)
+
 // NewServer returns a new RPC server.
 func NewServer() *Server {
 	return &Server{
@@ -49,6 +57,7 @@ func NewServer() *Server {
 type Server struct {
 	codecs   map[string]Codec
 	services *serviceMap
+	allow    []net.IP
 }
 
 // RegisterCodec adds a new codec to the server.
@@ -90,8 +99,38 @@ func (s *Server) HasMethod(method string) bool {
 	return false
 }
 
+// Bind makes the server to only accept requests comming from
+// specified IP addresses.
+func (s *Server) Bind(allow ...net.IP) {
+	s.allow = allow
+}
+
+// BindLocal makes the server to accept requests comming from
+// local IP only.
+func (s *Server) BindLocal() (err error) {
+	var addrs []net.Addr
+	if addrs, err = net.InterfaceAddrs(); err != nil {
+		return
+	}
+	local := make([]net.IP, 0, len(addrs))
+	for i := range addrs {
+		if ip, ok := addrs[i].(*net.IPNet); ok {
+			local = append(local, ip.IP)
+		}
+	}
+	if len(local) == 0 {
+		return ErrEmptyBindLocal
+	}
+	s.Bind(local...)
+	return
+}
+
 // ServeHTTP
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if err := s.clientAllowed(r.RemoteAddr); err != nil {
+		writeError(w, 403, err.Error())
+		return
+	}
 	if r.Method != "POST" {
 		writeError(w, 405, "rpc: POST method required, received "+r.Method)
 		return
@@ -146,6 +185,28 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if errWrite := codecReq.WriteResponse(w, reply.Interface(), errResult); errWrite != nil {
 		writeError(w, 400, errWrite.Error())
 	}
+}
+
+func (s *Server) clientAllowed(remoteAddr string) (err error) {
+	if len(s.allow) == 0 {
+		return nil
+	}
+	var (
+		host string
+		ip   net.IP
+	)
+	if host, _, err = net.SplitHostPort(remoteAddr); err != nil {
+		return fmt.Errorf("%s: %s", ErrMalformedRemoteIp, err)
+	}
+	if ip = net.ParseIP(host); ip == nil {
+		return ErrMalformedRemoteIp
+	}
+	for i := range s.allow {
+		if s.allow[i].Equal(ip) {
+			return nil
+		}
+	}
+	return ErrRemoteNotAllowed
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
