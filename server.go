@@ -115,8 +115,8 @@ func (s *Server) BindLocal() (err error) {
 	}
 	local := make([]net.IP, 0, len(addrs))
 	for i := range addrs {
-		if ip, ok := addrs[i].(*net.IPNet); ok {
-			local = append(local, ip.IP)
+		if ip, _, err := net.ParseCIDR(addrs[i].String()); err == nil {
+			local = append(local, ip)
 		}
 	}
 	if len(local) == 0 {
