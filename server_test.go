@@ -57,26 +57,28 @@ func TestRegisterService(t *testing.T) {
 	}
 }
 
-type result struct {
+type record struct {
 	addr string
 	ok   bool
 }
 
-func execute(t *testing.T, srv *Server, addr string, ok bool) {
-	req, err := http.NewRequest("POST", "http://127.0.0.1:80", strings.NewReader("request"))
-	if err != nil {
-		t.Fatal("expected r to be nil, got instead:", err)
-	}
-	req.RemoteAddr = addr
-	w := httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
-	if ok {
-		if w.Code == 403 {
-			t.Errorf("expected w.Code to be different than 403 for %s", addr)
+func executeTable(t *testing.T, srv *Server, table []record) {
+	for _, res := range table {
+		req, err := http.NewRequest("POST", "http://127.0.0.1:80", strings.NewReader("request"))
+		if err != nil {
+			t.Fatal("expected r to be nil, got instead:", err)
 		}
-	} else {
-		if w.Code != 403 {
-			t.Errorf("expected w.Code to be 403 for %s, got instead: %d", addr, w.Code)
+		req.RemoteAddr = res.addr
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		if res.ok {
+			if w.Code == 403 {
+				t.Errorf("expected w.Code to be different than 403 for %s", res.addr)
+			}
+		} else {
+			if w.Code != 403 {
+				t.Errorf("expected w.Code to be 403 for %s, got instead: %d", res.addr, w.Code)
+			}
 		}
 	}
 }
@@ -87,7 +89,7 @@ func TestBind(t *testing.T) {
 		net.IPv4(233, 100, 100, 33),
 		net.IPv4(198, 65, 22, 33),
 	)
-	results := []result{
+	table := []record{
 		{"127.0.0.1:8082", false},
 		{"198.65.43.43:7900", false},
 		{"233.100.100.33:8082", true},
@@ -95,18 +97,24 @@ func TestBind(t *testing.T) {
 		{"198.65.22.33:7900", true},
 		{"123.32.33.33:8080", false},
 	}
-	for i := range results {
-		execute(t, srv, results[i].addr, results[i].ok)
-	}
+	executeTable(t, srv, table)
 }
 
 func TestBindLocal(t *testing.T) {
 	srv := NewServer()
-	execute(t, srv, "32.32.33.33:8080", true)
-	execute(t, srv, "127.0.0.1:8082", true)
+	before := []record{
+		{"32.32.33.33:8080", true},
+		{"127.0.0.1:8082", true},
+		{"[::1]:8082", true},
+	}
+	after := []record{
+		{"127.0.0.1:8083", true},
+		{"32.32.33.33:8081", false},
+		{"[::1]:8084", true},
+	}
+	executeTable(t, srv, before)
 	if err := srv.BindLocal(); err != nil {
 		t.Fatal("expected err to be nil, got instead:", err)
 	}
-	execute(t, srv, "127.0.0.1:8082", true)
-	execute(t, srv, "32.32.33.33:8080", false)
+	executeTable(t, srv, after)
 }
