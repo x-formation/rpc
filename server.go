@@ -58,7 +58,7 @@ func NewServer() *Server {
 type Server struct {
 	codecs   map[string]Codec
 	services *serviceMap
-	allow    []net.IP
+	filters  []func(net.IP) bool
 }
 
 // RegisterCodec adds a new codec to the server.
@@ -103,7 +103,16 @@ func (s *Server) HasMethod(method string) bool {
 // Bind makes the server to only accept requests comming from
 // specified IP addresses.
 func (s *Server) Bind(allow ...net.IP) {
-	s.allow = allow
+	if len(allow) > 0 {
+		s.filters = append(s.filters, func(ip net.IP) bool {
+			for i := range allow {
+				if allow[i].Equal(ip) {
+					return true
+				}
+			}
+			return false
+		})
+	}
 }
 
 // BindLocal makes the server to accept requests comming from
@@ -115,14 +124,17 @@ func (s *Server) BindLocal() (err error) {
 	}
 	local := make([]net.IP, 0, len(addrs))
 	for i := range addrs {
-		if ip, ok := addrs[i].(*net.IPNet); ok {
-			local = append(local, ip.IP)
+		if ip := addrToIP(addrs[i]); ip != nil {
+			local = append(local, ip)
 		}
 	}
 	if len(local) == 0 {
 		return ErrEmptyBindLocal
 	}
 	s.Bind(local...)
+	s.filters = append(s.filters, func(ip net.IP) bool {
+		return ip.IsLoopback()
+	})
 	return
 }
 
@@ -189,7 +201,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) clientAllowed(remoteAddr string) (err error) {
-	if len(s.allow) == 0 {
+	if len(s.filters) == 0 {
 		return nil
 	}
 	var (
@@ -202,8 +214,8 @@ func (s *Server) clientAllowed(remoteAddr string) (err error) {
 	if ip = net.ParseIP(host); ip == nil {
 		return ErrMalformedRemoteIp
 	}
-	for i := range s.allow {
-		if s.allow[i].Equal(ip) {
+	for _, whitelisted := range s.filters {
+		if whitelisted(ip) {
 			return nil
 		}
 	}
