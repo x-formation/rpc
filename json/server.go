@@ -1,5 +1,6 @@
 // Copyright 2009 The Go Authors. All rights reserved.
 // Copyright 2012 The Gorilla Authors. All rights reserved.
+// Copyright 2013 X-Formation. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -118,8 +119,11 @@ func (c *CodecRequest) WriteResponse(w http.ResponseWriter, reply interface{}, m
 		Id:     c.request.Id,
 	}
 	if methodErr != nil {
-		// Propagate error message as string.
-		res.Error = methodErr.Error()
+		if e, ok := methodErr.(*Error); ok {
+			res.Error = e.Object()
+		} else {
+			res.Error = methodErr.Error()
+		}
 		// Result must be null if there was an error invoking the method.
 		// http://json-rpc.org/wiki/specification#a1.2Response
 		res.Result = &null
