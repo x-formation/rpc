@@ -11,12 +11,21 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/x-formation/rpc"
 )
 
-var ErrResponseError = errors.New("response error")
+type Service1Err struct {
+	Code    int
+	Message string
+}
+
+var (
+	ErrResponseError        = errors.New("response error")
+	ErrJsonResponseError, _ = NewErrorBlob([]byte(`{"code":42,"message":"this is error"}`))
+)
 
 type Service1Request struct {
 	A int
@@ -41,6 +50,10 @@ func (t *Service1) Multiply(r *http.Request, req *Service1Request, res *Service1
 
 func (t *Service1) ResponseError(r *http.Request, req *Service1Request, res *Service1Response) error {
 	return ErrResponseError
+}
+
+func (t *Service1) JsonResponseError(r *http.Request, req *Service1Request, res *Service1Response) error {
+	return ErrJsonResponseError
 }
 
 func execute(t *testing.T, s *rpc.Server, method string, req, res interface{}) error {
@@ -71,24 +84,34 @@ func executeRaw(t *testing.T, s *rpc.Server, req interface{}, res interface{}) i
 }
 
 func TestService(t *testing.T) {
-	s := rpc.NewServer()
+	var (
+		res Service1Response
+		req = &Service1Request{4, 2}
+		s   = rpc.NewServer()
+		err error
+	)
+
 	s.RegisterCodec(NewCodec(), "application/json")
 	s.RegisterService(new(Service1), "")
 
-	var res Service1Response
-	if err := execute(t, s, "Service1.Multiply", &Service1Request{4, 2}, &res); err != nil {
+	if err = execute(t, s, "Service1.Multiply", req, &res); err != nil {
 		t.Error("Expected err to be nil, but got:", err)
 	}
 	if res.Result != 8 {
 		t.Errorf("Wrong response: %v.", res.Result)
 	}
-
-	if err := execute(t, s, "Service1.ResponseError", &Service1Request{4, 2}, &res); err == nil {
+	if err = execute(t, s, "Service1.ResponseError", req, &res); err == nil {
 		t.Errorf("Expected to get %q, but got nil", ErrResponseError)
 	} else if err.Error() != ErrResponseError.Error() {
 		t.Errorf("Expected to get %q, but got %q", ErrResponseError, err)
 	}
-
+	if err, ok := execute(t, s, "Service1.JsonResponseError", req, &res).(*Error); !ok {
+		t.Error("Expected to get err to be of *json.Error type")
+	} else {
+		if !reflect.DeepEqual(err.Object(), ErrJsonResponseError.Object()) {
+			t.Errorf("Expected to get %q, but got %q", ErrJsonResponseError, err)
+		}
+	}
 	if code := executeRaw(t, s, &Service1BadRequest{"Service1.Multiply"}, &res); code != 400 {
 		t.Errorf("Expected http response code 400, but got %v", code)
 	}
